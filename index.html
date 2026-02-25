@@ -1,4 +1,4 @@
-<!-- Index.html v1.4 — GitHub Pages + QuaggaJS 1D 條碼專用版 -->
+<!-- Index.html v1.5 — GitHub Pages + QuaggaJS 按鈕觸發掃碼版 -->
 <!DOCTYPE html>
 <html>
 <head>
@@ -66,6 +66,28 @@
       pointer-events: none;
     }
 
+    .scan-btn {
+      width: 100%;
+      padding: 14px;
+      margin-bottom: 12px;
+      border: none;
+      border-radius: 12px;
+      background: #2563eb;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .scan-btn:active {
+      background: #1d4ed8;
+      transform: scale(0.98);
+    }
+    .scan-btn.scanning {
+      background: #f59e0b;
+      cursor: wait;
+    }
+
     .status-bar {
       background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 12px;
     }
@@ -115,14 +137,17 @@
   </div>
 </div>
 
-<!-- 掃碼區（v1.4 QuaggaJS 1D 條碼專用） -->
+<!-- 掃碼區 -->
 <div id="reader-container">
   <div class="scan-line"></div>
 </div>
 
+<!-- 掃碼按鈕 -->
+<button id="scanBtn" class="scan-btn" onclick="triggerScan()">📷 點擊掃碼</button>
+
 <!-- 狀態 -->
 <div class="status-bar">
-  <div class="last-result" id="lastResult">等待掃碼...</div>
+  <div class="last-result" id="lastResult">對準條碼後按「點擊掃碼」</div>
   <div class="count">累計掃碼：<span id="scanCount">0</span> 筆</div>
 </div>
 
@@ -143,11 +168,15 @@
   var lastScannedCode = '';
   var lastScanTime = 0;
   var DEBOUNCE_MS = 3000;
+  var ERROR_THRESHOLD = 0.25;
+  var quaggaReady = false;
+  var isScanning = false;
+  var scanTimeout = null;
 
   // 初始化
   window.onload = function() {
     loadSheetNames();
-    startScanner();
+    initScanner();
   };
 
   // 載入 Sheet 名稱
@@ -186,8 +215,8 @@
     }
   }
 
-  // 啟動 QuaggaJS 掃碼器
-  function startScanner() {
+  // 初始化掃碼器（只開相機預覽，不掃描）
+  function initScanner() {
     Quagga.init({
       inputStream: {
         name: "Live",
@@ -220,16 +249,41 @@
         console.error('Quagga init error:', err);
         return;
       }
+      // 啟動相機預覽，然後立刻暫停掃描
       Quagga.start();
+      Quagga.pause();
+      quaggaReady = true;
     });
 
-    // 偵測到條碼
+    // 偵測到條碼（含信心度過濾）
     Quagga.onDetected(function(result) {
-      var code = result.codeResult.code;
-      var now = Date.now();
+      // 掃到後立刻暫停
+      Quagga.pause();
+      isScanning = false;
+      if (scanTimeout) {
+        clearTimeout(scanTimeout);
+        scanTimeout = null;
+      }
+      updateScanBtn(false);
 
-      // 防重複
+      var code = result.codeResult.code;
+
+      // 信心度過濾
+      var errors = result.codeResult.decodedCodes
+        .filter(function(d) { return d.error !== undefined; })
+        .map(function(d) { return d.error; });
+      var avgError = errors.reduce(function(a, b) { return a + b; }, 0) / errors.length;
+
+      console.log('掃描結果:', code, '錯誤率:', avgError.toFixed(4));
+
+      if (avgError > ERROR_THRESHOLD) {
+        showResult('辨識不確定（錯誤率 ' + (avgError * 100).toFixed(1) + '%），請重新對準後再按掃碼', 'error');
+        return;
+      }
+
+      var now = Date.now();
       if (code === lastScannedCode && (now - lastScanTime) < DEBOUNCE_MS) {
+        showResult('重複掃碼：' + code + '（' + (DEBOUNCE_MS / 1000) + ' 秒內忽略）', 'error');
         return;
       }
       lastScannedCode = code;
@@ -237,6 +291,44 @@
 
       processCode(code);
     });
+  }
+
+  // 按鈕觸發掃描
+  function triggerScan() {
+    if (!quaggaReady) {
+      showResult('相機尚未就緒，請稍候', 'error');
+      return;
+    }
+    if (isScanning) {
+      return;
+    }
+
+    isScanning = true;
+    updateScanBtn(true);
+    showResult('掃描中... 請對準條碼', 'loading');
+
+    // 恢復掃描
+    Quagga.start();
+
+    // 3 秒後如果沒掃到，自動暫停
+    scanTimeout = setTimeout(function() {
+      Quagga.pause();
+      isScanning = false;
+      updateScanBtn(false);
+      showResult('未偵測到條碼，請調整角度後再按掃碼', 'error');
+    }, 3000);
+  }
+
+  // 更新按鈕狀態
+  function updateScanBtn(scanning) {
+    var btn = document.getElementById('scanBtn');
+    if (scanning) {
+      btn.textContent = '⏳ 掃描中...';
+      btn.classList.add('scanning');
+    } else {
+      btn.textContent = '📷 點擊掃碼';
+      btn.classList.remove('scanning');
+    }
   }
 
   // 處理掃碼結果
