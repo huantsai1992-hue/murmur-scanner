@@ -1,125 +1,254 @@
-// ====== 設定 ======
-const SPREADSHEET_ID = '你的SpreadsheetID'; // 替換成你的 Device Log Spreadsheet ID
+<!-- Index.html v1.3 — GitHub Pages 連續掃描版，透過 fetch GET 呼叫 GAS API -->
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f5f5f5;
+      padding: 16px;
+      max-width: 480px;
+      margin: 0 auto;
+    }
+    h2 { text-align: center; margin-bottom: 16px; font-size: 20px; }
 
-// ====== Web App 進入點 ======
-function doGet(e) {
-  // API 模式（供 GitHub Pages 前端呼叫）
-  if (e.parameter.action) {
-    return handleAPI(e.parameter);
+    .controls { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+    .controls label { display: block; font-size: 13px; color: #666; margin-bottom: 4px; margin-top: 12px; }
+    .controls label:first-child { margin-top: 0; }
+    .controls select {
+      width: 100%; padding: 10px; border: 1px solid #ddd;
+      border-radius: 8px; font-size: 15px; background: #fafafa;
+    }
+
+    .mode-tabs {
+      display: flex; gap: 8px; margin-bottom: 12px;
+    }
+    .mode-tabs button {
+      flex: 1; padding: 10px 4px; border: 2px solid #ddd; border-radius: 8px;
+      background: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+      transition: all 0.2s;
+    }
+    .mode-tabs button.active {
+      border-color: #2563eb; background: #eff6ff; color: #2563eb;
+    }
+
+    #reader { width: 100%; border-radius: 12px; overflow: hidden; margin-bottom: 12px; }
+
+    .status-bar {
+      background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 12px;
+    }
+    .status-bar .last-result { font-size: 15px; margin-bottom: 8px; }
+    .status-bar .count { font-size: 13px; color: #666; }
+
+    .result-success { color: #16a34a; font-weight: 600; }
+    .result-error { color: #dc2626; font-weight: 600; }
+    .result-loading { color: #2563eb; font-weight: 600; }
+
+    .log {
+      background: #fff; border-radius: 12px; padding: 16px;
+    }
+    .log h3 { font-size: 14px; color: #666; margin-bottom: 8px; }
+    .log ul { list-style: none; font-size: 13px; max-height: 200px; overflow-y: auto; }
+    .log li { padding: 6px 0; border-bottom: 1px solid #f0f0f0; }
+    .log li:last-child { border-bottom: none; }
+    .log-success { color: #16a34a; }
+    .log-error { color: #dc2626; }
+
+    .location-row { display: none; }
+    .location-row.show { display: block; }
+  </style>
+</head>
+<body>
+
+<h2>📦 Murmur 設備掃碼</h2>
+
+<!-- 模式切換 -->
+<div class="mode-tabs">
+  <button class="active" onclick="setMode('add')">入庫</button>
+  <button onclick="setMode('ship')">出貨</button>
+  <button onclick="setMode('relocate')">比對入庫</button>
+</div>
+
+<!-- 設定 -->
+<div class="controls">
+  <label>目標 Sheet</label>
+  <select id="sheetSelect"><option>載入中...</option></select>
+
+  <div class="location-row show" id="locationRow">
+    <label>儲存位置</label>
+    <select id="locationSelect">
+      <option value="桃園龜山">桃園龜山</option>
+      <option value="中鼎大樓">中鼎大樓</option>
+    </select>
+  </div>
+</div>
+
+<!-- 掃碼區（v1.3 連續掃描 — GitHub Pages 版） -->
+<div id="reader"></div>
+
+<!-- 狀態 -->
+<div class="status-bar">
+  <div class="last-result" id="lastResult">等待掃碼...</div>
+  <div class="count">累計掃碼：<span id="scanCount">0</span> 筆</div>
+</div>
+
+<!-- 紀錄 -->
+<div class="log">
+  <h3>掃碼紀錄</h3>
+  <ul id="logList"></ul>
+</div>
+
+<!-- html5-qrcode CDN -->
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+  // ====== 設定（替換成你的 GAS 部署網址） ======
+  var GAS_API_URL = '你的GAS部署網址/exec';
+
+  var currentMode = 'add';
+  var scanCount = 0;
+  var lastScannedCode = '';
+  var lastScanTime = 0;
+  var DEBOUNCE_MS = 3000;
+
+  // 初始化
+  window.onload = function() {
+    loadSheetNames();
+    startScanner();
+  };
+
+  // 載入 Sheet 名稱（透過 GAS API）
+  function loadSheetNames() {
+    callAPI({ action: 'getSheetNames' })
+      .then(function(result) {
+        if (result.success) {
+          var sel = document.getElementById('sheetSelect');
+          sel.innerHTML = '';
+          result.data.forEach(function(name) {
+            var opt = document.createElement('option');
+            opt.value = name;
+            opt.textContent = name;
+            sel.appendChild(opt);
+          });
+        }
+      })
+      .catch(function(err) {
+        console.error('載入 Sheet 失敗', err);
+      });
   }
-  // Web App 模式（v1.2 備用）
-  return HtmlService.createHtmlOutputFromFile('Index')
-    .setTitle('Murmur 設備掃碼系統')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
-}
 
-// ====== API 路由（供外部前端呼叫） ======
-function handleAPI(params) {
-  var action = params.action;
-  var result;
-  try {
-    if (action === 'getSheetNames') {
-      result = { success: true, data: getSheetNames() };
-    } else if (action === 'addDevice') {
-      result = addDevice(params.sheet, params.deviceId, params.location);
-    } else if (action === 'shipDevice') {
-      result = shipDevice(params.sheet, params.deviceId);
-    } else if (action === 'relocateDevice') {
-      result = relocateDevice(params.sheet, params.deviceId, params.location);
+  // 模式切換
+  function setMode(mode) {
+    currentMode = mode;
+    document.querySelectorAll('.mode-tabs button').forEach(function(btn) {
+      btn.classList.remove('active');
+    });
+    event.target.classList.add('active');
+
+    var locRow = document.getElementById('locationRow');
+    if (mode === 'ship') {
+      locRow.classList.remove('show');
     } else {
-      result = { success: false, message: '未知操作：' + action };
-    }
-  } catch (err) {
-    result = { success: false, message: '伺服器錯誤：' + err.message };
-  }
-  return ContentService.createTextOutput(JSON.stringify(result))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-// ====== 取得所有 Sheet 名稱 ======
-function getSheetNames() {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  return ss.getSheets().map(s => s.getName());
-}
-
-// ====== 功能 1：掃碼入庫（新增） ======
-function addDevice(sheetName, deviceId, location) {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const sheet = ss.getSheetByName(sheetName);
-  if (!sheet) return { success: false, message: '找不到工作表：' + sheetName };
-
-  // 檢查重複
-  const data = sheet.getRange('A:A').getValues().flat();
-  if (data.includes(deviceId)) {
-    return { success: false, message: '此設備已存在：' + deviceId };
-  }
-
-  // 找下一個空白列
-  const nextRow = getNextEmptyRow(sheet, 'A');
-  const today = new Date();
-
-  sheet.getRange(nextRow, 1).setValue(deviceId);       // A: Device_ID
-  sheet.getRange(nextRow, 2).setValue(today);           // B: 入庫日期
-  sheet.getRange(nextRow, 3).setValue('在庫');           // C: 狀態
-  // D: 出庫對象 - 留空
-  // E: 出庫日期 - 留空
-  sheet.getRange(nextRow, 6).setValue(location);        // F: 儲存位置
-
-  return { success: true, message: '入庫成功：' + deviceId };
-}
-
-// ====== 功能 2：掃碼出貨（改狀態） ======
-function shipDevice(sheetName, deviceId) {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const sheet = ss.getSheetByName(sheetName);
-  if (!sheet) return { success: false, message: '找不到工作表：' + sheetName };
-
-  const row = findDeviceRow(sheet, deviceId);
-  if (!row) {
-    return { success: false, message: '查無此設備：' + deviceId };
-  }
-
-  const today = new Date();
-  sheet.getRange(row, 3).setValue('出庫');    // C: 狀態
-  sheet.getRange(row, 5).setValue(today);     // E: 出庫日期
-
-  return { success: true, message: '出庫成功：' + deviceId };
-}
-
-// ====== 功能 3：掃碼比對入庫（改儲存位置） ======
-function relocateDevice(sheetName, deviceId, newLocation) {
-  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
-  const sheet = ss.getSheetByName(sheetName);
-  if (!sheet) return { success: false, message: '找不到工作表：' + sheetName };
-
-  const row = findDeviceRow(sheet, deviceId);
-  if (!row) {
-    return { success: false, message: '查無此設備：' + deviceId };
-  }
-
-  const today = new Date();
-  sheet.getRange(row, 6).setValue(newLocation);  // F: 儲存位置
-  sheet.getRange(row, 3).setValue('在庫');         // C: 狀態
-  sheet.getRange(row, 2).setValue(today);          // B: 入庫日期
-
-  return { success: true, message: '比對入庫成功：' + deviceId + ' → ' + newLocation };
-}
-
-// ====== 工具函數 ======
-function getNextEmptyRow(sheet, col) {
-  const colIndex = col.charCodeAt(0) - 64; // A=1, B=2...
-  const data = sheet.getRange(1, colIndex, sheet.getLastRow() + 1, 1).getValues();
-  for (let i = 0; i < data.length; i++) {
-    if (data[i][0] === '') return i + 1;
-  }
-  return data.length + 1;
-}
-
-function findDeviceRow(sheet, deviceId) {
-  const data = sheet.getRange('A:A').getValues();
-  for (let i = 0; i < data.length; i++) {
-    if (String(data[i][0]).trim() === String(deviceId).trim()) {
-      return i + 1;
+      locRow.classList.add('show');
     }
   }
-  return null;
-}
+
+  // 啟動掃碼器（v1.3 連續掃描模式）
+  function startScanner() {
+    var html5Qrcode = new Html5Qrcode("reader");
+
+    html5Qrcode.start(
+      { facingMode: "environment" },
+      {
+        fps: 10,
+        qrbox: { width: 280, height: 100 },
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.CODABAR,
+          Html5QrcodeSupportedFormats.ITF
+        ]
+      },
+      onScanSuccess,
+      onScanFailure
+    ).catch(function(err) {
+      document.getElementById('lastResult').textContent = '相機啟動失敗：' + err;
+    });
+  }
+
+  function onScanSuccess(decodedText) {
+    var now = Date.now();
+    if (decodedText === lastScannedCode && (now - lastScanTime) < DEBOUNCE_MS) {
+      return;
+    }
+    lastScannedCode = decodedText;
+    lastScanTime = now;
+
+    processCode(decodedText);
+  }
+
+  function onScanFailure(error) {
+    // 靜默處理
+  }
+
+  // 處理掃碼結果（透過 GAS API）
+  function processCode(code) {
+    var sheet = document.getElementById('sheetSelect').value;
+    var location = document.getElementById('locationSelect').value;
+
+    showResult('處理中...', 'loading');
+
+    var payload;
+    if (currentMode === 'add') {
+      payload = { action: 'addDevice', sheet: sheet, deviceId: code, location: location };
+    } else if (currentMode === 'ship') {
+      payload = { action: 'shipDevice', sheet: sheet, deviceId: code };
+    } else if (currentMode === 'relocate') {
+      payload = { action: 'relocateDevice', sheet: sheet, deviceId: code, location: location };
+    }
+
+    callAPI(payload)
+      .then(function(result) {
+        scanCount++;
+        document.getElementById('scanCount').textContent = scanCount;
+        var cssClass = result.success ? 'success' : 'error';
+        showResult(result.message, cssClass);
+        addLog(result.message, cssClass);
+      })
+      .catch(function(err) {
+        showResult('系統錯誤：' + err, 'error');
+        addLog('系統錯誤：' + err, 'error');
+      });
+  }
+
+  // GAS API 呼叫（GET 避免 CORS preflight）
+  function callAPI(payload) {
+    var params = new URLSearchParams(payload);
+    return fetch(GAS_API_URL + '?' + params.toString())
+      .then(function(res) { return res.json(); });
+  }
+
+  function showResult(msg, type) {
+    var el = document.getElementById('lastResult');
+    el.textContent = msg;
+    el.className = 'last-result result-' + type;
+  }
+
+  function addLog(msg, type) {
+    var li = document.createElement('li');
+    li.className = 'log-' + type;
+    var time = new Date().toLocaleTimeString('zh-TW', { hour12: false });
+    li.textContent = time + ' ' + msg;
+    var list = document.getElementById('logList');
+    list.insertBefore(li, list.firstChild);
+  }
+</script>
+
+</body>
+</html>
