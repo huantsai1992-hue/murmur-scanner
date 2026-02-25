@@ -1,0 +1,125 @@
+// ====== 設定 ======
+const SPREADSHEET_ID = '你的SpreadsheetID'; // 替換成你的 Device Log Spreadsheet ID
+
+// ====== Web App 進入點 ======
+function doGet(e) {
+  // API 模式（供 GitHub Pages 前端呼叫）
+  if (e.parameter.action) {
+    return handleAPI(e.parameter);
+  }
+  // Web App 模式（v1.2 備用）
+  return HtmlService.createHtmlOutputFromFile('Index')
+    .setTitle('Murmur 設備掃碼系統')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+// ====== API 路由（供外部前端呼叫） ======
+function handleAPI(params) {
+  var action = params.action;
+  var result;
+  try {
+    if (action === 'getSheetNames') {
+      result = { success: true, data: getSheetNames() };
+    } else if (action === 'addDevice') {
+      result = addDevice(params.sheet, params.deviceId, params.location);
+    } else if (action === 'shipDevice') {
+      result = shipDevice(params.sheet, params.deviceId);
+    } else if (action === 'relocateDevice') {
+      result = relocateDevice(params.sheet, params.deviceId, params.location);
+    } else {
+      result = { success: false, message: '未知操作：' + action };
+    }
+  } catch (err) {
+    result = { success: false, message: '伺服器錯誤：' + err.message };
+  }
+  return ContentService.createTextOutput(JSON.stringify(result))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+// ====== 取得所有 Sheet 名稱 ======
+function getSheetNames() {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  return ss.getSheets().map(s => s.getName());
+}
+
+// ====== 功能 1：掃碼入庫（新增） ======
+function addDevice(sheetName, deviceId, location) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) return { success: false, message: '找不到工作表：' + sheetName };
+
+  // 檢查重複
+  const data = sheet.getRange('A:A').getValues().flat();
+  if (data.includes(deviceId)) {
+    return { success: false, message: '此設備已存在：' + deviceId };
+  }
+
+  // 找下一個空白列
+  const nextRow = getNextEmptyRow(sheet, 'A');
+  const today = new Date();
+
+  sheet.getRange(nextRow, 1).setValue(deviceId);       // A: Device_ID
+  sheet.getRange(nextRow, 2).setValue(today);           // B: 入庫日期
+  sheet.getRange(nextRow, 3).setValue('在庫');           // C: 狀態
+  // D: 出庫對象 - 留空
+  // E: 出庫日期 - 留空
+  sheet.getRange(nextRow, 6).setValue(location);        // F: 儲存位置
+
+  return { success: true, message: '入庫成功：' + deviceId };
+}
+
+// ====== 功能 2：掃碼出貨（改狀態） ======
+function shipDevice(sheetName, deviceId) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) return { success: false, message: '找不到工作表：' + sheetName };
+
+  const row = findDeviceRow(sheet, deviceId);
+  if (!row) {
+    return { success: false, message: '查無此設備：' + deviceId };
+  }
+
+  const today = new Date();
+  sheet.getRange(row, 3).setValue('出庫');    // C: 狀態
+  sheet.getRange(row, 5).setValue(today);     // E: 出庫日期
+
+  return { success: true, message: '出庫成功：' + deviceId };
+}
+
+// ====== 功能 3：掃碼比對入庫（改儲存位置） ======
+function relocateDevice(sheetName, deviceId, newLocation) {
+  const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) return { success: false, message: '找不到工作表：' + sheetName };
+
+  const row = findDeviceRow(sheet, deviceId);
+  if (!row) {
+    return { success: false, message: '查無此設備：' + deviceId };
+  }
+
+  const today = new Date();
+  sheet.getRange(row, 6).setValue(newLocation);  // F: 儲存位置
+  sheet.getRange(row, 3).setValue('在庫');         // C: 狀態
+  sheet.getRange(row, 2).setValue(today);          // B: 入庫日期
+
+  return { success: true, message: '比對入庫成功：' + deviceId + ' → ' + newLocation };
+}
+
+// ====== 工具函數 ======
+function getNextEmptyRow(sheet, col) {
+  const colIndex = col.charCodeAt(0) - 64; // A=1, B=2...
+  const data = sheet.getRange(1, colIndex, sheet.getLastRow() + 1, 1).getValues();
+  for (let i = 0; i < data.length; i++) {
+    if (data[i][0] === '') return i + 1;
+  }
+  return data.length + 1;
+}
+
+function findDeviceRow(sheet, deviceId) {
+  const data = sheet.getRange('A:A').getValues();
+  for (let i = 0; i < data.length; i++) {
+    if (String(data[i][0]).trim() === String(deviceId).trim()) {
+      return i + 1;
+    }
+  }
+  return null;
+}
