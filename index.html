@@ -1,4 +1,4 @@
-<!-- Index.html v1.3 — GitHub Pages 連續掃描版，透過 fetch GET 呼叫 GAS API -->
+<!-- Index.html v1.4 — GitHub Pages + QuaggaJS 1D 條碼專用版 -->
 <!DOCTYPE html>
 <html>
 <head>
@@ -35,7 +35,36 @@
       border-color: #2563eb; background: #eff6ff; color: #2563eb;
     }
 
-    #reader { width: 100%; border-radius: 12px; overflow: hidden; margin-bottom: 12px; }
+    #reader-container {
+      position: relative;
+      width: 100%;
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 12px;
+      background: #000;
+    }
+    #reader-container video {
+      width: 100%;
+      display: block;
+    }
+    #reader-container canvas.drawingBuffer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+    .scan-line {
+      position: absolute;
+      top: 50%;
+      left: 5%;
+      width: 90%;
+      height: 2px;
+      background: #ef4444;
+      box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+      transform: translateY(-50%);
+      pointer-events: none;
+    }
 
     .status-bar {
       background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 12px;
@@ -86,8 +115,10 @@
   </div>
 </div>
 
-<!-- 掃碼區（v1.3 連續掃描 — GitHub Pages 版） -->
-<div id="reader"></div>
+<!-- 掃碼區（v1.4 QuaggaJS 1D 條碼專用） -->
+<div id="reader-container">
+  <div class="scan-line"></div>
+</div>
 
 <!-- 狀態 -->
 <div class="status-bar">
@@ -101,10 +132,10 @@
   <ul id="logList"></ul>
 </div>
 
-<!-- html5-qrcode CDN -->
-<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<!-- QuaggaJS (quagga2 maintained fork) -->
+<script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2/dist/quagga.min.js"></script>
 <script>
-  // ====== 設定（替換成你的 GAS 部署網址） ======
+  // ====== GAS API 網址 ======
   var GAS_API_URL = 'https://script.google.com/macros/s/AKfycbxTFPeR2-iXCk9RiIUMe92vaSTO4ga3xyVE0BF0N2494Y_yitI3NNPxf9JtZee58oXItg/exec';
 
   var currentMode = 'add';
@@ -119,7 +150,7 @@
     startScanner();
   };
 
-  // 載入 Sheet 名稱（透過 GAS API）
+  // 載入 Sheet 名稱
   function loadSheetNames() {
     callAPI({ action: 'getSheetNames' })
       .then(function(result) {
@@ -155,49 +186,60 @@
     }
   }
 
-  // 啟動掃碼器（v1.3 連續掃描模式）
+  // 啟動 QuaggaJS 掃碼器
   function startScanner() {
-    var html5Qrcode = new Html5Qrcode("reader");
-
-    html5Qrcode.start(
-      { facingMode: "environment" },
-      {
-        fps: 10,
-        qrbox: { width: 280, height: 100 },
-        formatsToSupport: [
-          Html5QrcodeSupportedFormats.CODE_128,
-          Html5QrcodeSupportedFormats.CODE_39,
-          Html5QrcodeSupportedFormats.EAN_13,
-          Html5QrcodeSupportedFormats.EAN_8,
-          Html5QrcodeSupportedFormats.UPC_A,
-          Html5QrcodeSupportedFormats.UPC_E,
-          Html5QrcodeSupportedFormats.CODABAR,
-          Html5QrcodeSupportedFormats.ITF
-        ]
+    Quagga.init({
+      inputStream: {
+        name: "Live",
+        type: "LiveStream",
+        target: document.getElementById('reader-container'),
+        constraints: {
+          facingMode: "environment",
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        }
       },
-      onScanSuccess,
-      onScanFailure
-    ).catch(function(err) {
-      document.getElementById('lastResult').textContent = '相機啟動失敗：' + err;
+      decoder: {
+        readers: [
+          "code_128_reader",
+          "ean_reader",
+          "ean_8_reader",
+          "code_39_reader",
+          "upc_reader",
+          "upc_e_reader",
+          "codabar_reader",
+          "i2of5_reader"
+        ],
+        multiple: false
+      },
+      locate: true,
+      frequency: 15
+    }, function(err) {
+      if (err) {
+        document.getElementById('lastResult').textContent = '相機啟動失敗：' + err.message;
+        console.error('Quagga init error:', err);
+        return;
+      }
+      Quagga.start();
+    });
+
+    // 偵測到條碼
+    Quagga.onDetected(function(result) {
+      var code = result.codeResult.code;
+      var now = Date.now();
+
+      // 防重複
+      if (code === lastScannedCode && (now - lastScanTime) < DEBOUNCE_MS) {
+        return;
+      }
+      lastScannedCode = code;
+      lastScanTime = now;
+
+      processCode(code);
     });
   }
 
-  function onScanSuccess(decodedText) {
-    var now = Date.now();
-    if (decodedText === lastScannedCode && (now - lastScanTime) < DEBOUNCE_MS) {
-      return;
-    }
-    lastScannedCode = decodedText;
-    lastScanTime = now;
-
-    processCode(decodedText);
-  }
-
-  function onScanFailure(error) {
-    // 靜默處理
-  }
-
-  // 處理掃碼結果（透過 GAS API）
+  // 處理掃碼結果
   function processCode(code) {
     var sheet = document.getElementById('sheetSelect').value;
     var location = document.getElementById('locationSelect').value;
@@ -227,7 +269,7 @@
       });
   }
 
-  // GAS API 呼叫（GET 避免 CORS preflight）
+  // GAS API 呼叫
   function callAPI(payload) {
     var params = new URLSearchParams(payload);
     return fetch(GAS_API_URL + '?' + params.toString())
